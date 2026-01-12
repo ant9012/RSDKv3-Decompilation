@@ -1,0 +1,163 @@
+name: Build RSDKv3 (Full Compilation)
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Compile Deps & Game
+    runs-on: macos-latest
+    
+    # Dependencies can take a while to compile; set timeout to 1 hour to be safe
+    timeout-minutes: 60
+
+    steps:
+      # 1. Checkout RSDKv3
+      - name: Checkout RSDKv3
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # 2. Setup Vcpkg (The Package Manager)
+      - name: Setup Vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 'latest'
+
+      # 3. Compile Audio/Video Libs for iOS (The "Hard" Part)
+      # This commands vcpkg to download source code and compile these 3 libs for arm64 iOS.
+      - name: Compile Ogg, Vorbis, Theora (via vcpkg)
+        run: |
+          # Install libraries for iOS architecture
+          $VCPKG_ROOT/vcpkg install libogg:arm64-ios libvorbis:arm64-ios libtheora:arm64-ios
+
+      # 4. Package Libs into Frameworks
+      # RSDKv3 expects .framework bundles, but vcpkg gives us raw .a files and headers.
+      # We must manually construct the framework folders.
+      - name: Package Vcpkg Libs into Frameworks
+        run: |
+          # Define where vcpkg put the files
+          INSTALL_DIR="$VCPKG_ROOT/installed/arm64-ios"
+          DEST_DIR="dependencies/ios"
+          
+          mkdir -p $DEST_DIR
+          
+          # --- Function to create a fake Framework from raw libs ---
+          create_framework() {
+              LIB_NAME=$1       # e.g., Ogg
+              A_FILE_PATH=$2    # e.g., libogg.a
+              HEADER_DIR=$3     # e.g., ogg
+              
+              FRAMEWORK_PATH="$DEST_DIR/$LIB_NAME.framework"
+              echo "Packaging $FRAMEWORK_PATH..."
+              
+              # Clean and Create Structure
+              rm -rf "$FRAMEWORK_PATH"
+              mkdir -p "$FRAMEWORK_PATH/Headers"
+              
+              # Copy the static library and rename it to the Framework name (no extension)
+              cp "$A_FILE_PATH" "$FRAMEWORK_PATH/$LIB_NAME"
+              
+              # Copy headers
+              # Note: We copy the contents of include/ogg into Headers/
+              cp -r "$INSTALL_DIR/include/$HEADER_DIR/"* "$FRAMEWORK_PATH/Headers/"
+              
+              # Create a minimal Info.plist (Required by some linkers)
+              cat > "$FRAMEWORK_PATH/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>$LIB_NAME</string>
+              <key>CFBundleIdentifier</key>
+              <string>org.xiph.$LIB_NAME</string>
+              <key>CFBundlePackageType</key>
+              <string>FMWK</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>MinimumOSVersion</key>
+              <string>11.0</string>
+          </dict>
+          </plist>
+          EOF
+          }
+          
+          # --- Execute Packaging ---
+          
+          # 1. Ogg
+          create_framework "Ogg" "$INSTALL_DIR/lib/libogg.a" "ogg"
+          
+          # 2. Vorbis
+          # Vorbis is tricky; RSDK expects 'vorbis' but vcpkg builds libvorbis.a and libvorbisfile.a
+          # We often need to merge them or just use libvorbis.a. RSDK usually just needs the core.
+          # However, RSDK might expect the framework to be named "libvorbis" or "Vorbis". 
+          # Standard RSDKv3 expects "Vorbis.framework"
+          create_framework "Vorbis" "$INSTALL_DIR/lib/libvorbis.a" "vorbis"
+          
+          # 3. Theora
+          create_framework "Theora" "$INSTALL_DIR/lib/libtheora.a" "theora"
+
+      # 5. Build SDL2 (Standard Method)
+      - name: Checkout SDL2
+        uses: actions/checkout@v4
+        with:
+          repository: libsdl-org/SDL
+          ref: release-2.28.5
+          path: SDL2_Source
+
+      - name: Compile SDL2 Framework
+        run: |
+          cd SDL2_Source/Xcode
+          
+          # Build SDL2 Framework
+          xcodebuild -project SDL.xcodeproj -target "Framework-iOS" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
+          
+          # Move to dependencies
+          mkdir -p ../../dependencies/ios/SDL2
+          cp -R ../build/Release-iphoneos/SDL2.framework ../../dependencies/ios/SDL2/
+          cp -R ../build/Release-iphoneos/hidapi.framework ../../dependencies/ios/SDL2/
+          
+          # Build libSDL2Main.a (Static Lib)
+          xcodebuild -project SDL.xcodeproj -target "libSDL2" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
+          cp ../build/Release-iphoneos/libSDL2.a ../../dependencies/ios/SDL2/libSDL2Main.a
+
+      # 6. Setup Xcode for Final Build
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      # 7. Final Build: Compile RSDKv3
+      - name: Build RSDKv3 IPA
+        run: |
+          # Check our work
+          echo "Checking dependencies/ios contents:"
+          ls -R dependencies/ios
+          
+          xcodebuild clean build \
+            -project "RSDKv3.xcodeproj" \
+            -scheme "RSDKv3" \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      # 8. Package & Upload
+      - name: Package IPA
+        run: |
+          cd build/Release-iphoneos/
+          mkdir Payload
+          mv RSDKv3.app Payload/
+          zip -r RSDKv3.ipa Payload
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RSDKv3-Full-Compile-iOS
+          path: build/Release-iphoneos/RSDKv3.ipa
