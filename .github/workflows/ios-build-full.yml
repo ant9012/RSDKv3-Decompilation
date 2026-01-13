@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Nested Folder Fix)
+name: RSDKv3 iOS (Assets Fix)
 
 on:
   push:
@@ -78,28 +78,16 @@ jobs:
           make -j4 && make install
           cd ..
           
-          # === CRITICAL FIX: CLEAN & COPY ===
+          # === POPULATE SOURCE FOR XCODE ===
           echo ">>> Populating dependencies/mac/ for Xcode..."
           cd .. 
-          # We are now in repo root
-          
-          # 1. Remove existing folders (they might be empty git submodules)
-          # If we don't do this, 'cp' puts the source INSIDE the existing folder (nested)
           rm -rf dependencies/mac/libogg
           rm -rf dependencies/mac/libvorbis
           rm -rf dependencies/mac/libtheora
-          
-          # 2. Ensure parent dir exists (it should, but just in case)
           mkdir -p dependencies/mac
-          
-          # 3. Copy the source folders cleanly
           cp -R build_libs/libogg dependencies/mac/
           cp -R build_libs/libvorbis dependencies/mac/
           cp -R build_libs/libtheora dependencies/mac/
-          
-          # 4. Debug: List contents to verify structure
-          echo ">>> Verifying Vorbis path..."
-          ls -R dependencies/mac/libvorbis/include || echo "❌ Vorbis include not found"
 
       - name: Package Libraries into Frameworks
         run: |
@@ -172,8 +160,22 @@ jobs:
         with:
           xcode-version: 'latest-stable'
 
+      - name: Fix Assets.xcassets
+        run: |
+          echo ">>> Resetting Assets.xcassets..."
+          # Delete potentially broken/empty assets folder
+          rm -rf dependencies/mac/Assets.xcassets
+          
+          # Create fresh directory structure
+          mkdir -p dependencies/mac/Assets.xcassets
+          
+          # Create a minimal valid Contents.json
+          echo '{"info" : {"version" : 1, "author" : "xcode"}}' > dependencies/mac/Assets.xcassets/Contents.json
+
       - name: Build RSDKv3 IPA
         run: |
+          echo ">>> Building RSDKv3..."
+          # We use ASSETCATALOG_COMPILER_APPICON_NAME="" to tell Xcode NOT to look for an App Icon
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
@@ -181,7 +183,9 @@ jobs:
             -sdk iphoneos \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ASSETCATALOG_COMPILER_APPICON_NAME="" \
+            ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME=""
 
       - name: Package and Upload IPA
         run: |
