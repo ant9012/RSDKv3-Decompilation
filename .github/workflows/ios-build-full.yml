@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Final Fix)
+name: RSDKv3 iOS (Nested Folder Fix)
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
           echo "INSTALL_DIR=$INSTALL_DIR" >> $GITHUB_ENV
 
-      - name: Compile Ogg, Vorbis, Theora
+      - name: Compile Ogg, Vorbis, Theora & Populate Source
         run: |
           cd ${{ env.WORK_DIR }}
           # --- DEFINE COMPILERS LOCALLY ---
@@ -47,7 +47,8 @@ jobs:
           echo ">>> Building Ogg..."
           curl -LO https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
           tar -xf libogg-1.3.5.tar.gz
-          cd libogg-1.3.5
+          mv libogg-1.3.5 libogg
+          cd libogg
           cp ../config.guess . && cp ../config.sub .
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j4 && make install
@@ -57,7 +58,8 @@ jobs:
           echo ">>> Building Vorbis..."
           curl -LO https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
           tar -xf libvorbis-1.3.7.tar.gz
-          cd libvorbis-1.3.7
+          mv libvorbis-1.3.7 libvorbis
+          cd libvorbis
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-ogg=${{ env.INSTALL_DIR }}
@@ -68,12 +70,36 @@ jobs:
           echo ">>> Building Theora..."
           curl -LO https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.gz
           tar -xf libtheora-1.1.1.tar.gz
-          cd libtheora-1.1.1
+          mv libtheora-1.1.1 libtheora
+          cd libtheora
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-spec --disable-asm --with-ogg=${{ env.INSTALL_DIR }} --with-vorbis=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
+          
+          # === CRITICAL FIX: CLEAN & COPY ===
+          echo ">>> Populating dependencies/mac/ for Xcode..."
+          cd .. 
+          # We are now in repo root
+          
+          # 1. Remove existing folders (they might be empty git submodules)
+          # If we don't do this, 'cp' puts the source INSIDE the existing folder (nested)
+          rm -rf dependencies/mac/libogg
+          rm -rf dependencies/mac/libvorbis
+          rm -rf dependencies/mac/libtheora
+          
+          # 2. Ensure parent dir exists (it should, but just in case)
+          mkdir -p dependencies/mac
+          
+          # 3. Copy the source folders cleanly
+          cp -R build_libs/libogg dependencies/mac/
+          cp -R build_libs/libvorbis dependencies/mac/
+          cp -R build_libs/libtheora dependencies/mac/
+          
+          # 4. Debug: List contents to verify structure
+          echo ">>> Verifying Vorbis path..."
+          ls -R dependencies/mac/libvorbis/include || echo "❌ Vorbis include not found"
 
       - name: Package Libraries into Frameworks
         run: |
@@ -111,7 +137,6 @@ jobs:
         run: |
           cd SDL2_Source/Xcode/SDL
           
-          # 1. Build Framework
           echo ">>> Building SDL2 Framework..."
           xcodebuild -project SDL.xcodeproj \
             -target "Framework-iOS" \
@@ -124,7 +149,6 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
 
-          # 2. Build Static Lib
           echo ">>> Building libSDL2 Static Lib..."
           xcodebuild -project SDL.xcodeproj \
             -target "Static Library-iOS" \
@@ -137,16 +161,10 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
           
-          # 3. Move files
+          # Move files
           TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
-          
-          # Copy Framework
           cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
-          
-          # === REMOVED HIDAPI COPY (It does not exist) ===
-          
-          # Copy Static Lib (Renaming to what RSDK expects)
           cp ../../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
 
       - name: Setup Xcode
