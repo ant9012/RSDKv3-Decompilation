@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Final Env Fix)
+name: RSDKv3 iOS (No-Sign Fix)
 
 on:
   push:
@@ -19,69 +19,58 @@ jobs:
 
       - name: Setup Build Environment
         run: |
-          # 1. Get iOS SDK Path
           echo "IOS_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
           echo "MIN_VER=12.0" >> $GITHUB_ENV
-          
-          # 2. Create a central install directory
           WORK_DIR=$(pwd)/build_libs
           INSTALL_DIR=$WORK_DIR/install
           mkdir -p $INSTALL_DIR
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
           echo "INSTALL_DIR=$INSTALL_DIR" >> $GITHUB_ENV
-          
-          # NOTE: We do NOT export CC/CXX here anymore to avoid breaking Xcode later.
 
       - name: Compile Ogg, Vorbis, Theora
         run: |
           cd ${{ env.WORK_DIR }}
-          
           # --- DEFINE COMPILERS LOCALLY ---
-          # These variables now only exist inside this specific step
           export CC="xcrun -sdk iphoneos clang"
           export CXX="xcrun -sdk iphoneos clang++"
           
-          # --- DOWNLOAD MODERN CONFIG SCRIPTS ---
+          # Download config scripts
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o config.guess
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o config.sub
           chmod +x config.guess config.sub
 
-          # --- COMMON FLAGS ---
           export CFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -I${{ env.INSTALL_DIR }}/include"
           export LDFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -L${{ env.INSTALL_DIR }}/lib"
           export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           
-          # --- 1. COMPILE LIBOGG ---
+          # 1. OGG
           echo ">>> Building Ogg..."
           curl -LO https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
           tar -xf libogg-1.3.5.tar.gz
           cd libogg-1.3.5
           cp ../config.guess . && cp ../config.sub .
-          
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j4 && make install
           cd ..
 
-          # --- 2. COMPILE LIBVORBIS ---
+          # 2. VORBIS
           echo ">>> Building Vorbis..."
           curl -LO https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
           tar -xf libvorbis-1.3.7.tar.gz
           cd libvorbis-1.3.7
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
-          
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-ogg=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
 
-          # --- 3. COMPILE LIBTHEORA ---
+          # 3. THEORA
           echo ">>> Building Theora..."
           curl -LO https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.gz
           tar -xf libtheora-1.1.1.tar.gz
           cd libtheora-1.1.1
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
-          
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-spec --disable-asm --with-ogg=${{ env.INSTALL_DIR }} --with-vorbis=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
@@ -120,35 +109,38 @@ jobs:
 
       - name: Compile SDL2
         run: |
-          # Go to the inner SDL Xcode project folder
           cd SDL2_Source/Xcode/SDL
           
-          # Force deployment target to match our environment to avoid warnings/errors
-          export IPHONEOS_DEPLOYMENT_TARGET=12.0
+          # === FIX: FORCE NO SIGNING & GENERIC DESTINATION ===
+          # We added CODE_SIGN_IDENTITY="" and disabled -quiet so we can see errors
           
-          # 1. Build Framework
-          # Note: We do NOT set CC or CXX here, so Xcode uses its defaults.
+          echo ">>> Building SDL2 Framework..."
           xcodebuild -project SDL.xcodeproj \
             -target "Framework-iOS" \
             -configuration Release \
             -sdk iphoneos \
-            -quiet \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
-          
-          # 2. Build Static Lib (libSDL2.a)
+
+          echo ">>> Building libSDL2..."
           xcodebuild -project SDL.xcodeproj \
             -target "libSDL2" \
             -configuration Release \
             -sdk iphoneos \
-            -quiet \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
           
-          # 3. Copy files to dependencies
+          # Copy to dependencies
           TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
-          
           cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
           cp -R ../../build/Release-iphoneos/hidapi.framework $TARGET_DIR/
           cp ../../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
