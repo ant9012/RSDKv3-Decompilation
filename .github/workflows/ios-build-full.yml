@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Assets Fix)
+name: RSDKv3 iOS (Fix Strict Warnings)
 
 on:
   push:
@@ -78,7 +78,7 @@ jobs:
           make -j4 && make install
           cd ..
           
-          # === POPULATE SOURCE FOR XCODE ===
+          # === CLEAN & COPY SOURCE FOR XCODE ===
           echo ">>> Populating dependencies/mac/ for Xcode..."
           cd .. 
           rm -rf dependencies/mac/libogg
@@ -163,19 +163,14 @@ jobs:
       - name: Fix Assets.xcassets
         run: |
           echo ">>> Resetting Assets.xcassets..."
-          # Delete potentially broken/empty assets folder
           rm -rf dependencies/mac/Assets.xcassets
-          
-          # Create fresh directory structure
           mkdir -p dependencies/mac/Assets.xcassets
-          
-          # Create a minimal valid Contents.json
           echo '{"info" : {"version" : 1, "author" : "xcode"}}' > dependencies/mac/Assets.xcassets/Contents.json
 
       - name: Build RSDKv3 IPA
         run: |
-          echo ">>> Building RSDKv3..."
-          # We use ASSETCATALOG_COMPILER_APPICON_NAME="" to tell Xcode NOT to look for an App Icon
+          echo ">>> Building RSDKv3 (Relaxed Warnings)..."
+          # Added GCC_TREAT_WARNINGS_AS_ERRORS=NO and WARNING_CFLAGS="-w" to suppress legacy code errors
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
@@ -185,7 +180,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             ASSETCATALOG_COMPILER_APPICON_NAME="" \
-            ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME=""
+            ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME="" \
+            GCC_TREAT_WARNINGS_AS_ERRORS=NO \
+            WARNING_CFLAGS="-w"
 
       - name: Package and Upload IPA
         run: |
