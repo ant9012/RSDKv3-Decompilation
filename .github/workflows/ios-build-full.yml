@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix Strict Warnings)
+name: RSDKv3 iOS (Fix AppKit Error)
 
 on:
   push:
@@ -167,10 +167,16 @@ jobs:
           mkdir -p dependencies/mac/Assets.xcassets
           echo '{"info" : {"version" : 1, "author" : "xcode"}}' > dependencies/mac/Assets.xcassets/Contents.json
 
+      - name: Patch Mac Source for iOS
+        run: |
+          echo ">>> Patching cocoaHelpers.mm for iOS..."
+          # cocoaHelpers.mm imports AppKit, which crashes the iOS build.
+          # We overwrite it with an empty dummy file for this build only.
+          echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
+
       - name: Build RSDKv3 IPA
         run: |
-          echo ">>> Building RSDKv3 (Relaxed Warnings)..."
-          # Added GCC_TREAT_WARNINGS_AS_ERRORS=NO and WARNING_CFLAGS="-w" to suppress legacy code errors
+          echo ">>> Building RSDKv3..."
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
