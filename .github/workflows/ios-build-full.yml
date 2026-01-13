@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (No-Sign Fix)
+name: RSDKv3 iOS (Final Target Fix)
 
 on:
   push:
@@ -111,8 +111,8 @@ jobs:
         run: |
           cd SDL2_Source/Xcode/SDL
           
-          # === FIX: FORCE NO SIGNING & GENERIC DESTINATION ===
-          # We added CODE_SIGN_IDENTITY="" and disabled -quiet so we can see errors
+          # === FIX IS HERE ===
+          # The correct target name is "Static Library-iOS", NOT "libSDL2"
           
           echo ">>> Building SDL2 Framework..."
           xcodebuild -project SDL.xcodeproj \
@@ -126,9 +126,9 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
 
-          echo ">>> Building libSDL2..."
+          echo ">>> Building libSDL2 Static Lib..."
           xcodebuild -project SDL.xcodeproj \
-            -target "libSDL2" \
+            -target "Static Library-iOS" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -143,6 +143,8 @@ jobs:
           mkdir -p $TARGET_DIR
           cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
           cp -R ../../build/Release-iphoneos/hidapi.framework $TARGET_DIR/
+          
+          # Use the file produced by "Static Library-iOS"
           cp ../../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
 
       - name: Setup Xcode
