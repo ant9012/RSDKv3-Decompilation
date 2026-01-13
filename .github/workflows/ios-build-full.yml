@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix GL Include)
+name: RSDKv3 iOS (Fix GL Header)
 
 on:
   push:
@@ -174,10 +174,14 @@ jobs:
           # We overwrite it with an empty dummy file for this build only.
           echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
 
+          echo ">>> Patching RetroEngine.hpp for iOS OpenGL..."
+          # The source attempts to include GL/glew.h (Desktop) instead of OpenGLES/ES2/gl.h (iOS).
+          # We use sed to swap the include since we know we are targeting iOS.
+          sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
+
       - name: Build RSDKv3 IPA
         run: |
           echo ">>> Building RSDKv3..."
-          # Force RETRO_PLATFORM=RETRO_iOS to avoid including desktop GL headers
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
