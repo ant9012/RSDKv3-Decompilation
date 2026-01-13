@@ -1,4 +1,4 @@
-name: Build RSDKv3 (Full Compilation)
+name: RSDKv3 iOS (Manual Compile)
 
 on:
   push:
@@ -7,102 +7,134 @@ on:
 
 jobs:
   build:
-    name: Compile Deps & Game
+    name: Build All Deps & Game
     runs-on: macos-latest
-    
-    # Dependencies can take a while to compile; set timeout to 1 hour to be safe
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
-      # 1. Checkout RSDKv3
+      # 1. Checkout Code
       - name: Checkout RSDKv3
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. Setup Vcpkg (The Package Manager)
-      - name: Setup Vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: 'latest'
-
-      # 3. Compile Audio/Video Libs for iOS (The "Hard" Part)
-      # This commands vcpkg to download source code and compile these 3 libs for arm64 iOS.
-      - name: Compile Ogg, Vorbis, Theora (via vcpkg)
+      # 2. Setup Environment Variables for Cross-Compilation
+      # This tells the compiler where the iOS SDK is located on the runner.
+      - name: Setup Build Environment
         run: |
-          # Install libraries for iOS architecture
-          $VCPKG_ROOT/vcpkg install libogg:arm64-ios libvorbis:arm64-ios libtheora:arm64-ios
+          echo "IOS_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+          echo "MIN_VER=12.0" >> $GITHUB_ENV
+          echo "ARCH_FLAGS=-arch arm64" >> $GITHUB_ENV
 
-      # 4. Package Libs into Frameworks
-      # RSDKv3 expects .framework bundles, but vcpkg gives us raw .a files and headers.
-      # We must manually construct the framework folders.
-      - name: Package Vcpkg Libs into Frameworks
+      # 3. Compile Audio Libraries (The Hard Part)
+      # We manually download sources and run standard ./configure with iOS flags
+      - name: Compile Ogg, Vorbis, Theora
         run: |
-          # Define where vcpkg put the files
-          INSTALL_DIR="$VCPKG_ROOT/installed/arm64-ios"
+          # Create a temporary build directory
+          mkdir -p build_libs
+          cd build_libs
+          BUILD_ROOT=$(pwd)
+          INSTALL_DIR=$BUILD_ROOT/install
+          mkdir -p $INSTALL_DIR
+
+          # --- 1. COMPILE LIBOGG ---
+          echo "Downloading Ogg..."
+          curl -LO https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
+          tar -xf libogg-1.3.5.tar.gz
+          cd libogg-1.3.5
+          
+          # Configure for iOS arm64
+          ./configure \
+            --host=aarch64-apple-darwin \
+            --prefix=$INSTALL_DIR \
+            --enable-static \
+            --disable-shared \
+            CC="xcrun -sdk iphoneos clang" \
+            CFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER" \
+            LDFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER"
+
+          make -j4 && make install
+          cd ..
+
+          # --- 2. COMPILE LIBVORBIS ---
+          echo "Downloading Vorbis..."
+          curl -LO https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
+          tar -xf libvorbis-1.3.7.tar.gz
+          cd libvorbis-1.3.7
+
+          # Configure for iOS (Pointing to our custom Ogg build)
+          ./configure \
+            --host=aarch64-apple-darwin \
+            --prefix=$INSTALL_DIR \
+            --enable-static \
+            --disable-shared \
+            --with-ogg=$INSTALL_DIR \
+            CC="xcrun -sdk iphoneos clang" \
+            CFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER" \
+            LDFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER"
+
+          make -j4 && make install
+          cd ..
+
+          # --- 3. COMPILE LIBTHEORA ---
+          # (Optional: Only if you need video. RSDKv3 uses it.)
+          echo "Downloading Theora..."
+          curl -LO https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.gz
+          tar -xf libtheora-1.1.1.tar.gz
+          cd libtheora-1.1.1
+          
+          # Theora config script is old and might guess the host wrong, so we force it carefully
+          # We also disable examples and spec to save compile time/errors
+          ./configure \
+            --host=aarch64-apple-darwin \
+            --prefix=$INSTALL_DIR \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-spec \
+            --with-ogg=$INSTALL_DIR \
+            --with-vorbis=$INSTALL_DIR \
+            CC="xcrun -sdk iphoneos clang" \
+            CFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER -Wno-implicit-function-declaration" \
+            LDFLAGS="-arch arm64 -isysroot $IOS_SDK_PATH -miphoneos-version-min=$MIN_VER"
+
+          make -j4 && make install
+          cd ..
+
+      # 4. Package Libraries into Frameworks
+      # Move the compiled .a files into the structure RSDKv3 expects
+      - name: Create Framework Structure
+        run: |
+          SRC_DIR="build_libs/install"
           DEST_DIR="dependencies/ios"
-          
           mkdir -p $DEST_DIR
-          
-          # --- Function to create a fake Framework from raw libs ---
-          create_framework() {
-              LIB_NAME=$1       # e.g., Ogg
-              A_FILE_PATH=$2    # e.g., libogg.a
-              HEADER_DIR=$3     # e.g., ogg
-              
-              FRAMEWORK_PATH="$DEST_DIR/$LIB_NAME.framework"
-              echo "Packaging $FRAMEWORK_PATH..."
-              
-              # Clean and Create Structure
-              rm -rf "$FRAMEWORK_PATH"
-              mkdir -p "$FRAMEWORK_PATH/Headers"
-              
-              # Copy the static library and rename it to the Framework name (no extension)
-              cp "$A_FILE_PATH" "$FRAMEWORK_PATH/$LIB_NAME"
-              
-              # Copy headers
-              # Note: We copy the contents of include/ogg into Headers/
-              cp -r "$INSTALL_DIR/include/$HEADER_DIR/"* "$FRAMEWORK_PATH/Headers/"
-              
-              # Create a minimal Info.plist (Required by some linkers)
-              cat > "$FRAMEWORK_PATH/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>$LIB_NAME</string>
-              <key>CFBundleIdentifier</key>
-              <string>org.xiph.$LIB_NAME</string>
-              <key>CFBundlePackageType</key>
-              <string>FMWK</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>MinimumOSVersion</key>
-              <string>11.0</string>
-          </dict>
-          </plist>
-          EOF
-          }
-          
-          # --- Execute Packaging ---
-          
-          # 1. Ogg
-          create_framework "Ogg" "$INSTALL_DIR/lib/libogg.a" "ogg"
-          
-          # 2. Vorbis
-          # Vorbis is tricky; RSDK expects 'vorbis' but vcpkg builds libvorbis.a and libvorbisfile.a
-          # We often need to merge them or just use libvorbis.a. RSDK usually just needs the core.
-          # However, RSDK might expect the framework to be named "libvorbis" or "Vorbis". 
-          # Standard RSDKv3 expects "Vorbis.framework"
-          create_framework "Vorbis" "$INSTALL_DIR/lib/libvorbis.a" "vorbis"
-          
-          # 3. Theora
-          create_framework "Theora" "$INSTALL_DIR/lib/libtheora.a" "theora"
 
-      # 5. Build SDL2 (Standard Method)
+          # Helper function to make a framework folder
+          make_framework() {
+            NAME=$1
+            LIB_FILE=$2
+            HEADER_DIR=$3
+            
+            FW_PATH="$DEST_DIR/$NAME.framework"
+            rm -rf "$FW_PATH"
+            mkdir -p "$FW_PATH/Headers"
+            
+            # Copy lib and headers
+            cp "$SRC_DIR/lib/$LIB_FILE" "$FW_PATH/$NAME"
+            cp -r "$SRC_DIR/include/$HEADER_DIR/"* "$FW_PATH/Headers/"
+            
+            # Create Dummy Info.plist
+            echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>'$NAME'</string><key>CFBundleIdentifier</key><string>org.xiph.'$NAME'</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>12.0</string></dict></plist>' > "$FW_PATH/Info.plist"
+          }
+
+          make_framework "Ogg" "libogg.a" "ogg"
+          make_framework "Vorbis" "libvorbis.a" "vorbis"
+          make_framework "Theora" "libtheora.a" "theora"
+          
+          echo "Frameworks created in $DEST_DIR"
+          ls -R $DEST_DIR
+
+      # 5. Build SDL2 (Using Xcode directly as it's cleaner for SDL)
       - name: Checkout SDL2
         uses: actions/checkout@v4
         with:
@@ -110,35 +142,33 @@ jobs:
           ref: release-2.28.5
           path: SDL2_Source
 
-      - name: Compile SDL2 Framework
+      - name: Compile SDL2
         run: |
           cd SDL2_Source/Xcode
           
-          # Build SDL2 Framework
+          # Framework
           xcodebuild -project SDL.xcodeproj -target "Framework-iOS" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
           
-          # Move to dependencies
-          mkdir -p ../../dependencies/ios/SDL2
-          cp -R ../build/Release-iphoneos/SDL2.framework ../../dependencies/ios/SDL2/
-          cp -R ../build/Release-iphoneos/hidapi.framework ../../dependencies/ios/SDL2/
-          
-          # Build libSDL2Main.a (Static Lib)
+          # Static Lib (Main)
           xcodebuild -project SDL.xcodeproj -target "libSDL2" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
-          cp ../build/Release-iphoneos/libSDL2.a ../../dependencies/ios/SDL2/libSDL2Main.a
+          
+          # Move to dependencies
+          TARGET_DIR="../../dependencies/ios/SDL2"
+          mkdir -p $TARGET_DIR
+          
+          cp -R ../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
+          cp -R ../build/Release-iphoneos/hidapi.framework $TARGET_DIR/
+          cp ../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
 
-      # 6. Setup Xcode for Final Build
+      # 6. Setup Xcode
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: 'latest-stable'
 
-      # 7. Final Build: Compile RSDKv3
+      # 7. Final Build
       - name: Build RSDKv3 IPA
         run: |
-          # Check our work
-          echo "Checking dependencies/ios contents:"
-          ls -R dependencies/ios
-          
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
@@ -149,15 +179,8 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       # 8. Package & Upload
-      - name: Package IPA
-        run: |
-          cd build/Release-iphoneos/
-          mkdir Payload
-          mv RSDKv3.app Payload/
-          zip -r RSDKv3.ipa Payload
-
-      - name: Upload Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: RSDKv3-Full-Compile-iOS
-          path: build/Release-iphoneos/RSDKv3.ipa
+          name: RSDKv3-Manual-Build
+          path: build/Release-iphoneos/RSDKv3.app
