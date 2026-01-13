@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix GL Header)
+name: RSDKv3 iOS (Fix SDL Include)
 
 on:
   push:
@@ -182,6 +182,7 @@ jobs:
       - name: Build RSDKv3 IPA
         run: |
           echo ">>> Building RSDKv3..."
+          # Fix: Include FRAMEWORK_SEARCH_PATHS and HEADER_SEARCH_PATHS to locate SDL2
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
@@ -194,7 +195,9 @@ jobs:
             ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME="" \
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             WARNING_CFLAGS="-w" \
-            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2'
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
+            FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2/SDL2.framework/Headers'
 
       - name: Package and Upload IPA
         run: |
