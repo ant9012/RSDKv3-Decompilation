@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Path Fix)
+name: RSDKv3 iOS (Final Env Fix)
 
 on:
   push:
@@ -23,20 +23,23 @@ jobs:
           echo "IOS_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
           echo "MIN_VER=12.0" >> $GITHUB_ENV
           
-          # 2. Set strict compiler flags for ARM64
-          echo "CC=xcrun -sdk iphoneos clang" >> $GITHUB_ENV
-          echo "CXX=xcrun -sdk iphoneos clang++" >> $GITHUB_ENV
-          
-          # 3. Create a central install directory
+          # 2. Create a central install directory
           WORK_DIR=$(pwd)/build_libs
           INSTALL_DIR=$WORK_DIR/install
           mkdir -p $INSTALL_DIR
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
           echo "INSTALL_DIR=$INSTALL_DIR" >> $GITHUB_ENV
+          
+          # NOTE: We do NOT export CC/CXX here anymore to avoid breaking Xcode later.
 
       - name: Compile Ogg, Vorbis, Theora
         run: |
           cd ${{ env.WORK_DIR }}
+          
+          # --- DEFINE COMPILERS LOCALLY ---
+          # These variables now only exist inside this specific step
+          export CC="xcrun -sdk iphoneos clang"
+          export CXX="xcrun -sdk iphoneos clang++"
           
           # --- DOWNLOAD MODERN CONFIG SCRIPTS ---
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o config.guess
@@ -117,19 +120,32 @@ jobs:
 
       - name: Compile SDL2
         run: |
-          # === FIX IS HERE: cd into Xcode/SDL, not just Xcode ===
+          # Go to the inner SDL Xcode project folder
           cd SDL2_Source/Xcode/SDL
           
+          # Force deployment target to match our environment to avoid warnings/errors
+          export IPHONEOS_DEPLOYMENT_TARGET=12.0
+          
           # 1. Build Framework
-          # We output build artifacts to a simpler path (../build) relative to where we are
-          xcodebuild -project SDL.xcodeproj -target "Framework-iOS" -configuration Release -sdk iphoneos -quiet SYMROOT=../../build
+          # Note: We do NOT set CC or CXX here, so Xcode uses its defaults.
+          xcodebuild -project SDL.xcodeproj \
+            -target "Framework-iOS" \
+            -configuration Release \
+            -sdk iphoneos \
+            -quiet \
+            SYMROOT=../../build \
+            IPHONEOS_DEPLOYMENT_TARGET=12.0
           
           # 2. Build Static Lib (libSDL2.a)
-          xcodebuild -project SDL.xcodeproj -target "libSDL2" -configuration Release -sdk iphoneos -quiet SYMROOT=../../build
+          xcodebuild -project SDL.xcodeproj \
+            -target "libSDL2" \
+            -configuration Release \
+            -sdk iphoneos \
+            -quiet \
+            SYMROOT=../../build \
+            IPHONEOS_DEPLOYMENT_TARGET=12.0
           
           # 3. Copy files to dependencies
-          # Note: We are currently in SDL2_Source/Xcode/SDL
-          # So we go up 3 levels to reach the repo root
           TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
           
