@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Config Fix)
+name: RSDKv3 iOS (Path Fix)
 
 on:
   push:
@@ -38,8 +38,7 @@ jobs:
         run: |
           cd ${{ env.WORK_DIR }}
           
-          # --- PREPARE: DOWNLOAD MODERN CONFIG SCRIPTS ---
-          # This fixes the "Invalid configuration aarch64" error
+          # --- DOWNLOAD MODERN CONFIG SCRIPTS ---
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o config.guess
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o config.sub
           chmod +x config.guess config.sub
@@ -54,10 +53,7 @@ jobs:
           curl -LO https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
           tar -xf libogg-1.3.5.tar.gz
           cd libogg-1.3.5
-          
-          # Update config scripts
-          cp ../config.guess .
-          cp ../config.sub .
+          cp ../config.guess . && cp ../config.sub .
           
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j4 && make install
@@ -68,19 +64,10 @@ jobs:
           curl -LO https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
           tar -xf libvorbis-1.3.7.tar.gz
           cd libvorbis-1.3.7
-          
-          # Update config scripts & fix linker flag
-          cp ../config.guess .
-          cp ../config.sub .
+          cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           
-          ./configure \
-            --host=aarch64-apple-darwin \
-            --prefix=${{ env.INSTALL_DIR }} \
-            --enable-static \
-            --disable-shared \
-            --with-ogg=${{ env.INSTALL_DIR }}
-            
+          ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-ogg=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
 
@@ -89,23 +76,10 @@ jobs:
           curl -LO https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.gz
           tar -xf libtheora-1.1.1.tar.gz
           cd libtheora-1.1.1
-          
-          # Update config scripts & fix flags
-          cp ../config.guess .
-          cp ../config.sub .
+          cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           
-          ./configure \
-            --host=aarch64-apple-darwin \
-            --prefix=${{ env.INSTALL_DIR }} \
-            --enable-static \
-            --disable-shared \
-            --disable-examples \
-            --disable-spec \
-            --disable-asm \
-            --with-ogg=${{ env.INSTALL_DIR }} \
-            --with-vorbis=${{ env.INSTALL_DIR }}
-            
+          ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-spec --disable-asm --with-ogg=${{ env.INSTALL_DIR }} --with-vorbis=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
 
@@ -143,15 +117,25 @@ jobs:
 
       - name: Compile SDL2
         run: |
-          cd SDL2_Source/Xcode
-          xcodebuild -project SDL.xcodeproj -target "Framework-iOS" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
-          xcodebuild -project SDL.xcodeproj -target "libSDL2" -configuration Release -sdk iphoneos -quiet SYMROOT=../build
+          # === FIX IS HERE: cd into Xcode/SDL, not just Xcode ===
+          cd SDL2_Source/Xcode/SDL
           
-          TARGET_DIR="../../dependencies/ios/SDL2"
+          # 1. Build Framework
+          # We output build artifacts to a simpler path (../build) relative to where we are
+          xcodebuild -project SDL.xcodeproj -target "Framework-iOS" -configuration Release -sdk iphoneos -quiet SYMROOT=../../build
+          
+          # 2. Build Static Lib (libSDL2.a)
+          xcodebuild -project SDL.xcodeproj -target "libSDL2" -configuration Release -sdk iphoneos -quiet SYMROOT=../../build
+          
+          # 3. Copy files to dependencies
+          # Note: We are currently in SDL2_Source/Xcode/SDL
+          # So we go up 3 levels to reach the repo root
+          TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
-          cp -R ../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
-          cp -R ../build/Release-iphoneos/hidapi.framework $TARGET_DIR/
-          cp ../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
+          
+          cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
+          cp -R ../../build/Release-iphoneos/hidapi.framework $TARGET_DIR/
+          cp ../../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
