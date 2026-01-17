@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Final Fix)
+name: RSDKv3 iOS (Headers Fix)
 
 on:
   push:
@@ -75,14 +75,6 @@ jobs:
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-spec --disable-asm --with-ogg=${{ env.INSTALL_DIR }} --with-vorbis=${{ env.INSTALL_DIR }}
           make -j4 && make install
           cd ..
-          
-          # Populating Dependencies for Xcode
-          echo ">>> Populating dependencies/mac/ for Xcode..."
-          cd .. 
-          mkdir -p dependencies/mac
-          cp -R build_libs/libogg dependencies/mac/
-          cp -R build_libs/libvorbis dependencies/mac/
-          cp -R build_libs/libtheora dependencies/mac/
 
       - name: Checkout SDL2
         uses: actions/checkout@v4
@@ -140,11 +132,9 @@ jobs:
           # Fix OpenGL include for iOS (ES2)
           sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
 
-          # === FIX: Create Dummy Data.rsdk ===
-          echo ">>> Creating dummy Data.rsdk to satisfy Xcode..."
+          # Create dummy data for build
           mkdir -p dependencies/ios
           touch dependencies/ios/Data.rsdk
-          # Also ensure Default.png exists (sometimes required)
           touch dependencies/ios/Default.png
 
       - name: Prepare Headers for SDL2
@@ -156,53 +146,33 @@ jobs:
         run: |
           echo ">>> Searching for Xcode Projects..."
           
-          # Use newline as separator to handle spaces in filenames
           IFS=$'\n'
           PROJECTS=$(find . -name "*.xcodeproj" -not -path "*/.*" -not -path "*SDL2*")
+          unset IFS
           
           echo "Found projects:"
           echo "$PROJECTS"
           
-          SELECTED_PROJ="RSDKv3.xcodeproj" # Default fallback
-          
-          # Iterate ensuring spaces are preserved
+          SELECTED_PROJ="RSDKv3.xcodeproj"
           for proj in $PROJECTS; do
-            # Convert to lower case for checking
             LOWER_PROJ=$(echo "$proj" | tr '[:upper:]' '[:lower:]')
             if [[ "$LOWER_PROJ" == *"ios"* ]]; then
                SELECTED_PROJ="$proj"
-               echo ">>> Auto-selected iOS Project: $SELECTED_PROJ"
                break
             fi
           done
-          unset IFS
 
           if [ ! -d "$SELECTED_PROJ" ]; then
             echo "Error: Project directory '$SELECTED_PROJ' not found."
             exit 1
           fi
 
-          echo ">>> Listing Schemes for '$SELECTED_PROJ'..."
-          # Quote the path to handle spaces
-          xcodebuild -list -project "$SELECTED_PROJ"
+          echo ">>> Building Project: '$SELECTED_PROJ'"
           
-          # Extract schemes
-          SCHEMES=$(xcodebuild -list -project "$SELECTED_PROJ" | grep "Schemes:" -A 100 | tail -n +2 | xargs)
-          SELECTED_SCHEME="RSDKv3"
-          
-          for s in $SCHEMES; do
-            if [[ "$s" == *"iOS"* ]] || [[ "$s" == *"ios"* ]]; then
-              SELECTED_SCHEME=$s
-              echo ">>> Auto-selected iOS Scheme: $SELECTED_SCHEME"
-              break
-            fi
-          done
-          
-          echo ">>> Building Project: '$SELECTED_PROJ' (Scheme: $SELECTED_SCHEME)"
-          
+          # FIX: Extensive Header and Library Search Paths added below
           xcodebuild clean build \
             -project "$SELECTED_PROJ" \
-            -scheme "$SELECTED_SCHEME" \
+            -scheme "RSDKv3" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -215,17 +185,15 @@ jobs:
             WARNING_CFLAGS="-w" \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
             FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2'
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2 $(PROJECT_DIR)/dependencies/ios/SDL2/SDL2 $(PROJECT_DIR)/RSDKv3 $(PROJECT_DIR)/build_libs/install/include' \
+            LIBRARY_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/build_libs/install/lib'
 
-          # Move built app
           mkdir -p build_output
-          # Use find with print0/xargs to handle potential spaces in output too
           find . -name "*.app" -print0 | xargs -0 -I {} cp -R {} build_output/
 
       - name: Package and Upload IPA
         run: |
           cd build_output
-          # Find the app name handling spaces
           APP_NAME=$(find . -name "*.app" -maxdepth 1 | head -n 1)
           
           if [ -z "$APP_NAME" ]; then
