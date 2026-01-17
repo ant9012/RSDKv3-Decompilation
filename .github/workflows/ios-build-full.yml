@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix Destination & Includes)
+name: RSDKv3 iOS (Fix Platform & Includes)
 
 on:
   push:
@@ -104,7 +104,6 @@ jobs:
             else
                 cp "$SRC_DIR/include/"*.h "$FW_PATH/Headers/"
             fi
-            # Create minimal Info.plist
             echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>'$NAME'</string><key>CFBundleIdentifier</key><string>org.xiph.'$NAME'</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>12.0</string></dict></plist>' > "$FW_PATH/Info.plist"
           }
 
@@ -123,7 +122,6 @@ jobs:
         run: |
           cd SDL2_Source/Xcode/SDL
           
-          # Build SDL2 Framework for iOS
           xcodebuild -project SDL.xcodeproj \
             -target "Framework-iOS" \
             -configuration Release \
@@ -135,7 +133,6 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
 
-          # Build Static Lib (just in case)
           xcodebuild -project SDL.xcodeproj \
             -target "Static Library-iOS" \
             -configuration Release \
@@ -147,7 +144,6 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
           
-          # Copy to dependencies
           TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
           cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
@@ -160,12 +156,12 @@ jobs:
 
       - name: Fix Assets & Source
         run: |
-          # Reset Assets to prevent corruption issues
+          # Reset Assets
           rm -rf dependencies/mac/Assets.xcassets
           mkdir -p dependencies/mac/Assets.xcassets
           echo '{"info" : {"version" : 1, "author" : "xcode"}}' > dependencies/mac/Assets.xcassets/Contents.json
 
-          # Dummy file for Mac-specific helper
+          # Patch cocoaHelpers.mm (Remove AppKit dependency)
           echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
 
           # Fix OpenGL include for iOS
@@ -173,17 +169,14 @@ jobs:
 
       - name: Prepare Headers for SDL2
         run: |
-          # The code expects <SDL2/SDL.h>.
-          # We create a symlink: dependencies/ios/SDL2/SDL2 -> dependencies/ios/SDL2/SDL2.framework/Headers
-          # This allows the include path "dependencies/ios/SDL2" to satisfy "SDL2/SDL.h".
+          # Symlink headers so <SDL2/SDL.h> works
           cd dependencies/ios/SDL2
           ln -sf SDL2.framework/Headers SDL2
 
       - name: Build RSDKv3 IPA
         run: |
           echo ">>> Building RSDKv3..."
-          # Added: -destination 'generic/platform=iOS' to stop Mac build warnings
-          # Updated: HEADER_SEARCH_PATHS to point to the folder containing the 'SDL2' symlink
+          # Fix: Force SUPPORTED_PLATFORMS to iphoneos to bypass Mac-only project settings
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
@@ -199,7 +192,9 @@ jobs:
             WARNING_CFLAGS="-w" \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
             FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2'
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
+            SUPPORTED_PLATFORMS=iphoneos \
+            TARGETED_DEVICE_FAMILY="1,2"
 
       - name: Package and Upload IPA
         run: |
