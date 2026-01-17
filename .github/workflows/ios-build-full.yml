@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix Platform & Includes)
+name: RSDKv3 iOS (Auto-Detect)
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build RSDKv3
+    name: Build RSDKv3 iOS
     runs-on: macos-latest
     timeout-minutes: 60
 
@@ -33,14 +33,13 @@ jobs:
           export CC="xcrun -sdk iphoneos clang"
           export CXX="xcrun -sdk iphoneos clang++"
           
-          # Config scripts
+          # Download config scripts
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o config.guess
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o config.sub
           chmod +x config.guess config.sub
 
           export CFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -I${{ env.INSTALL_DIR }}/include"
           export LDFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -L${{ env.INSTALL_DIR }}/lib"
-          export PKG_CONFIG_PATH="${{ env.INSTALL_DIR }}/lib/pkgconfig"
           
           # 1. OGG
           echo ">>> Building Ogg..."
@@ -77,39 +76,13 @@ jobs:
           make -j4 && make install
           cd ..
           
-          # Populating Dependencies for Xcode Project
+          # Populating Dependencies for Xcode
           echo ">>> Populating dependencies/mac/ for Xcode..."
           cd .. 
-          rm -rf dependencies/mac/libogg dependencies/mac/libvorbis dependencies/mac/libtheora
           mkdir -p dependencies/mac
           cp -R build_libs/libogg dependencies/mac/
           cp -R build_libs/libvorbis dependencies/mac/
           cp -R build_libs/libtheora dependencies/mac/
-
-      - name: Package Libraries into Frameworks
-        run: |
-          SRC_DIR="${{ env.INSTALL_DIR }}"
-          DEST_DIR="dependencies/ios"
-          mkdir -p $DEST_DIR
-
-          make_framework() {
-            NAME=$1
-            LIB_FILE=$2
-            HEADER_DIR=$3
-            FW_PATH="$DEST_DIR/$NAME.framework"
-            rm -rf "$FW_PATH" && mkdir -p "$FW_PATH/Headers"
-            cp "$SRC_DIR/lib/$LIB_FILE" "$FW_PATH/$NAME"
-            if [ -d "$SRC_DIR/include/$HEADER_DIR" ]; then
-                cp -r "$SRC_DIR/include/$HEADER_DIR/"* "$FW_PATH/Headers/"
-            else
-                cp "$SRC_DIR/include/"*.h "$FW_PATH/Headers/"
-            fi
-            echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>'$NAME'</string><key>CFBundleIdentifier</key><string>org.xiph.'$NAME'</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>12.0</string></dict></plist>' > "$FW_PATH/Info.plist"
-          }
-
-          make_framework "Ogg" "libogg.a" "ogg"
-          make_framework "Vorbis" "libvorbis.a" "vorbis"
-          make_framework "Theora" "libtheora.a" "theora"
 
       - name: Checkout SDL2
         uses: actions/checkout@v4
@@ -164,7 +137,7 @@ jobs:
           # Patch cocoaHelpers.mm (Remove AppKit dependency)
           echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
 
-          # Fix OpenGL include for iOS
+          # Fix OpenGL include for iOS (ES2)
           sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
 
       - name: Prepare Headers for SDL2
@@ -173,13 +146,46 @@ jobs:
           cd dependencies/ios/SDL2
           ln -sf SDL2.framework/Headers SDL2
 
-      - name: Build RSDKv3 IPA
+      - name: Detect and Build iOS Project
         run: |
-          echo ">>> Building RSDKv3..."
-          # Fix: Force SUPPORTED_PLATFORMS to iphoneos to bypass Mac-only project settings
+          echo ">>> Searching for Xcode Projects..."
+          # Find all .xcodeproj files, excluding hidden ones
+          PROJECTS=$(find . -name "*.xcodeproj" -not -path "*/.*" -not -path "*SDL2*")
+          echo "Found projects:"
+          echo "$PROJECTS"
+          
+          # Default to root project
+          SELECTED_PROJ="RSDKv3.xcodeproj"
+          
+          # Prioritize any project with "iOS" in the name or path
+          for proj in $PROJECTS; do
+            if [[ "$proj" == *"iOS"* ]] || [[ "$proj" == *"ios"* ]]; then
+               SELECTED_PROJ=$proj
+               echo ">>> Auto-selected iOS Project: $SELECTED_PROJ"
+               break
+            fi
+          done
+
+          echo ">>> Listing Schemes for $SELECTED_PROJ..."
+          xcodebuild -list -project "$SELECTED_PROJ"
+          
+          # Try to find a scheme with "iOS" in the name
+          SCHEMES=$(xcodebuild -list -project "$SELECTED_PROJ" | grep "Schemes:" -A 100 | tail -n +2 | xargs)
+          SELECTED_SCHEME="RSDKv3"
+          
+          for s in $SCHEMES; do
+            if [[ "$s" == *"iOS"* ]]; then
+              SELECTED_SCHEME=$s
+              echo ">>> Auto-selected iOS Scheme: $SELECTED_SCHEME"
+              break
+            fi
+          done
+          
+          echo ">>> Building Project: $SELECTED_PROJ (Scheme: $SELECTED_SCHEME)"
+          
           xcodebuild clean build \
-            -project "RSDKv3.xcodeproj" \
-            -scheme "RSDKv3" \
+            -project "$SELECTED_PROJ" \
+            -scheme "$SELECTED_SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -192,19 +198,27 @@ jobs:
             WARNING_CFLAGS="-w" \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
             FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            SUPPORTED_PLATFORMS=iphoneos \
-            TARGETED_DEVICE_FAMILY="1,2"
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2'
+
+          # Move built app to a consistent location
+          mkdir -p build_output
+          find . -name "*.app" -type d -exec cp -R {} build_output/ \;
 
       - name: Package and Upload IPA
         run: |
-          cd build/Release-iphoneos/
+          cd build_output
+          APP_NAME=$(find . -name "*.app" -maxdepth 1 | head -n 1)
+          if [ -z "$APP_NAME" ]; then
+             echo "Error: No .app found in build output!"
+             exit 1
+          fi
+          
           mkdir Payload
-          mv RSDKv3.app Payload/
+          mv "$APP_NAME" Payload/
           zip -r RSDKv3.ipa Payload
           
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: RSDKv3-iOS-IPA
-          path: build/Release-iphoneos/RSDKv3.ipa
+          path: build_output/RSDKv3.ipa
