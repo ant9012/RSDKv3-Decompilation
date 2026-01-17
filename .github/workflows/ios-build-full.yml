@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Headers Fix)
+name: RSDKv3 iOS (Fix Spaces & Headers)
 
 on:
   push:
@@ -146,28 +146,17 @@ jobs:
         run: |
           echo ">>> Searching for Xcode Projects..."
           
-          IFS=$'\n'
-          PROJECTS=$(find . -name "*.xcodeproj" -not -path "*/.*" -not -path "*SDL2*")
-          unset IFS
-          
-          echo "Found projects:"
-          echo "$PROJECTS"
-          
-          SELECTED_PROJ="RSDKv3.xcodeproj"
-          for proj in $PROJECTS; do
-            LOWER_PROJ=$(echo "$proj" | tr '[:upper:]' '[:lower:]')
-            if [[ "$LOWER_PROJ" == *"ios"* ]]; then
-               SELECTED_PROJ="$proj"
-               break
-            fi
-          done
-
-          if [ ! -d "$SELECTED_PROJ" ]; then
-            echo "Error: Project directory '$SELECTED_PROJ' not found."
-            exit 1
+          # DIRECTLY CHECK for the project to avoid whitespace splitting issues in loops
+          if [ -d "RSDKv3 ios.xcodeproj" ]; then
+             SELECTED_PROJ="RSDKv3 ios.xcodeproj"
+          elif [ -d "RSDKv3.xcodeproj" ]; then
+             SELECTED_PROJ="RSDKv3.xcodeproj"
+          else
+             echo "Error: Could not find RSDKv3 ios.xcodeproj or RSDKv3.xcodeproj"
+             exit 1
           fi
 
-          echo ">>> Building Project: '$SELECTED_PROJ'"
+          echo ">>> Selected Project: '$SELECTED_PROJ'"
           
           # FIX: Extensive Header and Library Search Paths added below
           xcodebuild clean build \
