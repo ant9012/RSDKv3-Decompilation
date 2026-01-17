@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix Spaces & Headers)
+name: RSDKv3 iOS (Unified Headers)
 
 on:
   push:
@@ -20,12 +20,21 @@ jobs:
       - name: Setup Build Environment
         run: |
           echo "IOS_SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
-          echo "MIN_VER=12.0" >> $GITHUB_ENV
+          echo "MIN_VER=13.0" >> $GITHUB_ENV
+          
+          # Create a unified install directory for ALL libraries (Static libs + Headers)
           WORK_DIR=$(pwd)/build_libs
           INSTALL_DIR=$WORK_DIR/install
-          mkdir -p $INSTALL_DIR
+          INCLUDE_DIR=$INSTALL_DIR/include
+          LIB_DIR=$INSTALL_DIR/lib
+          
+          mkdir -p $INCLUDE_DIR
+          mkdir -p $LIB_DIR
+          
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
           echo "INSTALL_DIR=$INSTALL_DIR" >> $GITHUB_ENV
+          echo "INCLUDE_DIR=$INCLUDE_DIR" >> $GITHUB_ENV
+          echo "LIB_DIR=$LIB_DIR" >> $GITHUB_ENV
 
       - name: Compile Ogg, Vorbis, Theora
         run: |
@@ -38,15 +47,14 @@ jobs:
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o config.sub
           chmod +x config.guess config.sub
 
-          export CFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -I${{ env.INSTALL_DIR }}/include"
-          export LDFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -L${{ env.INSTALL_DIR }}/lib"
+          export CFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -I${{ env.INCLUDE_DIR }}"
+          export LDFLAGS="-arch arm64 -isysroot ${{ env.IOS_SDK_PATH }} -miphoneos-version-min=${{ env.MIN_VER }} -L${{ env.LIB_DIR }}"
           
           # 1. OGG
           echo ">>> Building Ogg..."
           curl -LO https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz
           tar -xf libogg-1.3.5.tar.gz
-          mv libogg-1.3.5 libogg
-          cd libogg
+          cd libogg-1.3.5
           cp ../config.guess . && cp ../config.sub .
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared
           make -j4 && make install
@@ -56,8 +64,7 @@ jobs:
           echo ">>> Building Vorbis..."
           curl -LO https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz
           tar -xf libvorbis-1.3.7.tar.gz
-          mv libvorbis-1.3.7 libvorbis
-          cd libvorbis
+          cd libvorbis-1.3.7
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --with-ogg=${{ env.INSTALL_DIR }}
@@ -68,8 +75,7 @@ jobs:
           echo ">>> Building Theora..."
           curl -LO https://downloads.xiph.org/releases/theora/libtheora-1.1.1.tar.gz
           tar -xf libtheora-1.1.1.tar.gz
-          mv libtheora-1.1.1 libtheora
-          cd libtheora
+          cd libtheora-1.1.1
           cp ../config.guess . && cp ../config.sub .
           sed -i '' 's/-force_cpusubtype_ALL//g' configure
           ./configure --host=aarch64-apple-darwin --prefix=${{ env.INSTALL_DIR }} --enable-static --disable-shared --disable-examples --disable-spec --disable-asm --with-ogg=${{ env.INSTALL_DIR }} --with-vorbis=${{ env.INSTALL_DIR }}
@@ -87,17 +93,7 @@ jobs:
         run: |
           cd SDL2_Source/Xcode/SDL
           
-          xcodebuild -project SDL.xcodeproj \
-            -target "Framework-iOS" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            SYMROOT=../../build \
-            IPHONEOS_DEPLOYMENT_TARGET=12.0
-
+          # Build Static Library
           xcodebuild -project SDL.xcodeproj \
             -target "Static Library-iOS" \
             -configuration Release \
@@ -107,12 +103,17 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             SYMROOT=../../build \
-            IPHONEOS_DEPLOYMENT_TARGET=12.0
+            IPHONEOS_DEPLOYMENT_TARGET=${{ env.MIN_VER }}
+
+          # Copy Libs to Unified Dir
+          cp ../../build/Release-iphoneos/libSDL2.a ${{ env.LIB_DIR }}/libSDL2.a
           
-          TARGET_DIR="../../../dependencies/ios/SDL2"
-          mkdir -p $TARGET_DIR
-          cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
-          cp ../../build/Release-iphoneos/libSDL2.a $TARGET_DIR/libSDL2Main.a
+          # Copy Headers to Unified Dir (Critical Step)
+          # We copy them twice: once to include/ and once to include/SDL2/
+          # This ensures both <SDL.h> and <SDL2/SDL.h> work.
+          cp -R ../../include/* ${{ env.INCLUDE_DIR }}/
+          mkdir -p ${{ env.INCLUDE_DIR }}/SDL2
+          cp -R ../../include/* ${{ env.INCLUDE_DIR }}/SDL2/
 
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -130,37 +131,25 @@ jobs:
           echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
 
           # Fix OpenGL include for iOS (ES2)
-          sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
+          # Ensure we include the Apple specific headers if standard GL headers fail
+          sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>\n#include <OpenGLES/ES2/glext.h>|g' RSDKv3/RetroEngine.hpp
 
           # Create dummy data for build
           mkdir -p dependencies/ios
           touch dependencies/ios/Data.rsdk
           touch dependencies/ios/Default.png
 
-      - name: Prepare Headers for SDL2
+      - name: Build iOS Project
         run: |
-          cd dependencies/ios/SDL2
-          ln -sf SDL2.framework/Headers SDL2
-
-      - name: Detect and Build iOS Project
-        run: |
-          echo ">>> Searching for Xcode Projects..."
+          # Define paths explicitly
+          PROJ_FILE="RSDKv3 ios.xcodeproj"
+          UNIFIED_INCLUDE="${{ env.INCLUDE_DIR }}"
+          UNIFIED_LIB="${{ env.LIB_DIR }}"
           
-          # DIRECTLY CHECK for the project to avoid whitespace splitting issues in loops
-          if [ -d "RSDKv3 ios.xcodeproj" ]; then
-             SELECTED_PROJ="RSDKv3 ios.xcodeproj"
-          elif [ -d "RSDKv3.xcodeproj" ]; then
-             SELECTED_PROJ="RSDKv3.xcodeproj"
-          else
-             echo "Error: Could not find RSDKv3 ios.xcodeproj or RSDKv3.xcodeproj"
-             exit 1
-          fi
+          echo ">>> Building with Include Path: $UNIFIED_INCLUDE"
 
-          echo ">>> Selected Project: '$SELECTED_PROJ'"
-          
-          # FIX: Extensive Header and Library Search Paths added below
           xcodebuild clean build \
-            -project "$SELECTED_PROJ" \
+            -project "$PROJ_FILE" \
             -scheme "RSDKv3" \
             -configuration Release \
             -sdk iphoneos \
@@ -173,28 +162,25 @@ jobs:
             GCC_TREAT_WARNINGS_AS_ERRORS=NO \
             WARNING_CFLAGS="-w" \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
-            FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2 $(PROJECT_DIR)/dependencies/ios/SDL2/SDL2 $(PROJECT_DIR)/RSDKv3 $(PROJECT_DIR)/build_libs/install/include' \
-            LIBRARY_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/build_libs/install/lib'
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/RSDKv3 '"$UNIFIED_INCLUDE" \
+            LIBRARY_SEARCH_PATHS='$(inherited) '"$UNIFIED_LIB" \
+            OTHER_LDFLAGS='$(inherited) -lSDL2 -logg -lvorbis -ltheora -framework OpenGLES -framework AudioToolbox -framework CoreAudio -framework CoreGraphics -framework QuartzCore -framework UIKit -framework Foundation -framework CoreMotion -framework GameController -framework AVFoundation'
 
+          # Package
           mkdir -p build_output
           find . -name "*.app" -print0 | xargs -0 -I {} cp -R {} build_output/
-
-      - name: Package and Upload IPA
-        run: |
+          
           cd build_output
           APP_NAME=$(find . -name "*.app" -maxdepth 1 | head -n 1)
-          
           if [ -z "$APP_NAME" ]; then
              echo "Error: No .app found in build output!"
              exit 1
           fi
           
-          echo "Packaging $APP_NAME..."
           mkdir Payload
           mv "$APP_NAME" Payload/
           zip -r RSDKv3.ipa Payload
-          
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
