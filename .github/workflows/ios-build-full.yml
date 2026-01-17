@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Space Fix)
+name: RSDKv3 iOS (Final Fix)
 
 on:
   push:
@@ -139,6 +139,13 @@ jobs:
 
           # Fix OpenGL include for iOS (ES2)
           sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
+
+          # === FIX: Create Dummy Data.rsdk ===
+          echo ">>> Creating dummy Data.rsdk to satisfy Xcode..."
+          mkdir -p dependencies/ios
+          touch dependencies/ios/Data.rsdk
+          # Also ensure Default.png exists (sometimes required)
+          touch dependencies/ios/Default.png
 
       - name: Prepare Headers for SDL2
         run: |
