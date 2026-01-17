@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Auto-Detect)
+name: RSDKv3 iOS (Space Fix)
 
 on:
   push:
@@ -142,46 +142,56 @@ jobs:
 
       - name: Prepare Headers for SDL2
         run: |
-          # Symlink headers so <SDL2/SDL.h> works
           cd dependencies/ios/SDL2
           ln -sf SDL2.framework/Headers SDL2
 
       - name: Detect and Build iOS Project
         run: |
           echo ">>> Searching for Xcode Projects..."
-          # Find all .xcodeproj files, excluding hidden ones
+          
+          # Use newline as separator to handle spaces in filenames
+          IFS=$'\n'
           PROJECTS=$(find . -name "*.xcodeproj" -not -path "*/.*" -not -path "*SDL2*")
+          
           echo "Found projects:"
           echo "$PROJECTS"
           
-          # Default to root project
-          SELECTED_PROJ="RSDKv3.xcodeproj"
+          SELECTED_PROJ="RSDKv3.xcodeproj" # Default fallback
           
-          # Prioritize any project with "iOS" in the name or path
+          # Iterate ensuring spaces are preserved
           for proj in $PROJECTS; do
-            if [[ "$proj" == *"iOS"* ]] || [[ "$proj" == *"ios"* ]]; then
-               SELECTED_PROJ=$proj
+            # Convert to lower case for checking
+            LOWER_PROJ=$(echo "$proj" | tr '[:upper:]' '[:lower:]')
+            if [[ "$LOWER_PROJ" == *"ios"* ]]; then
+               SELECTED_PROJ="$proj"
                echo ">>> Auto-selected iOS Project: $SELECTED_PROJ"
                break
             fi
           done
+          unset IFS
 
-          echo ">>> Listing Schemes for $SELECTED_PROJ..."
+          if [ ! -d "$SELECTED_PROJ" ]; then
+            echo "Error: Project directory '$SELECTED_PROJ' not found."
+            exit 1
+          fi
+
+          echo ">>> Listing Schemes for '$SELECTED_PROJ'..."
+          # Quote the path to handle spaces
           xcodebuild -list -project "$SELECTED_PROJ"
           
-          # Try to find a scheme with "iOS" in the name
+          # Extract schemes
           SCHEMES=$(xcodebuild -list -project "$SELECTED_PROJ" | grep "Schemes:" -A 100 | tail -n +2 | xargs)
           SELECTED_SCHEME="RSDKv3"
           
           for s in $SCHEMES; do
-            if [[ "$s" == *"iOS"* ]]; then
+            if [[ "$s" == *"iOS"* ]] || [[ "$s" == *"ios"* ]]; then
               SELECTED_SCHEME=$s
               echo ">>> Auto-selected iOS Scheme: $SELECTED_SCHEME"
               break
             fi
           done
           
-          echo ">>> Building Project: $SELECTED_PROJ (Scheme: $SELECTED_SCHEME)"
+          echo ">>> Building Project: '$SELECTED_PROJ' (Scheme: $SELECTED_SCHEME)"
           
           xcodebuild clean build \
             -project "$SELECTED_PROJ" \
@@ -200,19 +210,23 @@ jobs:
             FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
             HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2'
 
-          # Move built app to a consistent location
+          # Move built app
           mkdir -p build_output
-          find . -name "*.app" -type d -exec cp -R {} build_output/ \;
+          # Use find with print0/xargs to handle potential spaces in output too
+          find . -name "*.app" -print0 | xargs -0 -I {} cp -R {} build_output/
 
       - name: Package and Upload IPA
         run: |
           cd build_output
+          # Find the app name handling spaces
           APP_NAME=$(find . -name "*.app" -maxdepth 1 | head -n 1)
+          
           if [ -z "$APP_NAME" ]; then
              echo "Error: No .app found in build output!"
              exit 1
           fi
           
+          echo "Packaging $APP_NAME..."
           mkdir Payload
           mv "$APP_NAME" Payload/
           zip -r RSDKv3.ipa Payload
