@@ -1,4 +1,4 @@
-name: RSDKv3 iOS (Fix SDL Include)
+name: RSDKv3 iOS (Fix Destination & Includes)
 
 on:
   push:
@@ -27,14 +27,13 @@ jobs:
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
           echo "INSTALL_DIR=$INSTALL_DIR" >> $GITHUB_ENV
 
-      - name: Compile Ogg, Vorbis, Theora & Populate Source
+      - name: Compile Ogg, Vorbis, Theora
         run: |
           cd ${{ env.WORK_DIR }}
-          # --- DEFINE COMPILERS LOCALLY ---
           export CC="xcrun -sdk iphoneos clang"
           export CXX="xcrun -sdk iphoneos clang++"
           
-          # Download config scripts
+          # Config scripts
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess;hb=HEAD" -o config.guess
           curl -L "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=HEAD" -o config.sub
           chmod +x config.guess config.sub
@@ -78,12 +77,10 @@ jobs:
           make -j4 && make install
           cd ..
           
-          # === CLEAN & COPY SOURCE FOR XCODE ===
+          # Populating Dependencies for Xcode Project
           echo ">>> Populating dependencies/mac/ for Xcode..."
           cd .. 
-          rm -rf dependencies/mac/libogg
-          rm -rf dependencies/mac/libvorbis
-          rm -rf dependencies/mac/libtheora
+          rm -rf dependencies/mac/libogg dependencies/mac/libvorbis dependencies/mac/libtheora
           mkdir -p dependencies/mac
           cp -R build_libs/libogg dependencies/mac/
           cp -R build_libs/libvorbis dependencies/mac/
@@ -107,6 +104,7 @@ jobs:
             else
                 cp "$SRC_DIR/include/"*.h "$FW_PATH/Headers/"
             fi
+            # Create minimal Info.plist
             echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>'$NAME'</string><key>CFBundleIdentifier</key><string>org.xiph.'$NAME'</string><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string><key>MinimumOSVersion</key><string>12.0</string></dict></plist>' > "$FW_PATH/Info.plist"
           }
 
@@ -125,7 +123,7 @@ jobs:
         run: |
           cd SDL2_Source/Xcode/SDL
           
-          echo ">>> Building SDL2 Framework..."
+          # Build SDL2 Framework for iOS
           xcodebuild -project SDL.xcodeproj \
             -target "Framework-iOS" \
             -configuration Release \
@@ -137,7 +135,7 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
 
-          echo ">>> Building libSDL2 Static Lib..."
+          # Build Static Lib (just in case)
           xcodebuild -project SDL.xcodeproj \
             -target "Static Library-iOS" \
             -configuration Release \
@@ -149,7 +147,7 @@ jobs:
             SYMROOT=../../build \
             IPHONEOS_DEPLOYMENT_TARGET=12.0
           
-          # Move files
+          # Copy to dependencies
           TARGET_DIR="../../../dependencies/ios/SDL2"
           mkdir -p $TARGET_DIR
           cp -R ../../build/Release-iphoneos/SDL2.framework $TARGET_DIR/
@@ -160,34 +158,38 @@ jobs:
         with:
           xcode-version: 'latest-stable'
 
-      - name: Fix Assets.xcassets
+      - name: Fix Assets & Source
         run: |
-          echo ">>> Resetting Assets.xcassets..."
+          # Reset Assets to prevent corruption issues
           rm -rf dependencies/mac/Assets.xcassets
           mkdir -p dependencies/mac/Assets.xcassets
           echo '{"info" : {"version" : 1, "author" : "xcode"}}' > dependencies/mac/Assets.xcassets/Contents.json
 
-      - name: Patch Mac Source for iOS
-        run: |
-          echo ">>> Patching cocoaHelpers.mm for iOS..."
-          # cocoaHelpers.mm imports AppKit, which crashes the iOS build.
-          # We overwrite it with an empty dummy file for this build only.
+          # Dummy file for Mac-specific helper
           echo "// Empty file to bypass AppKit dependency on iOS" > dependencies/mac/cocoaHelpers.mm
 
-          echo ">>> Patching RetroEngine.hpp for iOS OpenGL..."
-          # The source attempts to include GL/glew.h (Desktop) instead of OpenGLES/ES2/gl.h (iOS).
-          # We use sed to swap the include since we know we are targeting iOS.
+          # Fix OpenGL include for iOS
           sed -i '' 's|#include <GL/glew.h>|#include <OpenGLES/ES2/gl.h>|g' RSDKv3/RetroEngine.hpp
+
+      - name: Prepare Headers for SDL2
+        run: |
+          # The code expects <SDL2/SDL.h>.
+          # We create a symlink: dependencies/ios/SDL2/SDL2 -> dependencies/ios/SDL2/SDL2.framework/Headers
+          # This allows the include path "dependencies/ios/SDL2" to satisfy "SDL2/SDL.h".
+          cd dependencies/ios/SDL2
+          ln -sf SDL2.framework/Headers SDL2
 
       - name: Build RSDKv3 IPA
         run: |
           echo ">>> Building RSDKv3..."
-          # Fix: Include FRAMEWORK_SEARCH_PATHS and HEADER_SEARCH_PATHS to locate SDL2
+          # Added: -destination 'generic/platform=iOS' to stop Mac build warnings
+          # Updated: HEADER_SEARCH_PATHS to point to the folder containing the 'SDL2' symlink
           xcodebuild clean build \
             -project "RSDKv3.xcodeproj" \
             -scheme "RSDKv3" \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
@@ -197,7 +199,7 @@ jobs:
             WARNING_CFLAGS="-w" \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) RETRO_PLATFORM=RETRO_iOS RETRO_RENDERDEVICE=RETRO_GLES2' \
             FRAMEWORK_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2' \
-            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2/SDL2.framework/Headers'
+            HEADER_SEARCH_PATHS='$(inherited) $(PROJECT_DIR)/dependencies/ios/SDL2'
 
       - name: Package and Upload IPA
         run: |
