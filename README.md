@@ -49,7 +49,9 @@ This project uses [CMake](https://cmake.org/), a versatile building system that 
 
 ## Get the source code
 
-In order to clone the repository, you need to install Git, which you can get [here](https://git-scm.com/downloads).
+**DO NOT** download the source code ZIP archive from GitHub, as they do not include the submodules required to build the decompilation.
+
+Instead, you will need to clone the repository using Git, which you can get [here](https://git-scm.com/downloads).
 
 Clone the repo **recursively**, using:
 `git clone --recursive --single-branch --branch web https://github.com/ant9012/RSDKv3-Decompilation.git`
@@ -69,6 +71,7 @@ After downloading libtheora, unzip it in `dependencies/all` as 'libtheora'.
 > This fork does *not* run standalone! If you want to host your own build, you will need to build the [RSDK-Library Engine Manager](https://github.com/Jdsle/RSDK), or develop your own interface.
 
 > Also you will need to replace RSDKv3.js/wasm in the public/modules folder if you're using the [RSDK-Library Engine Manager](https://github.com/Jdsle/RSDK), if you want prebuilt versions go here: https://github.com/ant9012/rsdk-library-fork/tree/main/public/modules and for playable prebuilts if you simply want to play this web port, go here: https://ant9012.github.io/rsdk-library-fork
+
 
 Compiling is as simple as typing the following in the root repository directory:
 ```
